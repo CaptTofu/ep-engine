@@ -23,8 +23,9 @@ public:
 
     void visit(StoredValue *v) {
         count += 1;
-        std::string key = v->getKey();
-        std::string val = v->getValue();
+        shared_ptr<const Item> item = v->getItem();
+        std::string key = item->getKey();
+        std::string val(item->getConstData(), item->getNBytes());
         std::string subval = val.substr(0, val.length() - 2);
         assert(key.compare(subval) == 0);
     }
@@ -37,7 +38,7 @@ static int count(HashTable &h) {
 }
 
 static void store(HashTable &h, std::string &k) {
-    Item i(k, 0, 0, k.c_str(), k.length());
+    shared_ptr<const Item> i(new Item(k, 0, 0, k.c_str(), k.length()));
     h.set(i);
 }
 
@@ -53,7 +54,7 @@ static void addMany(HashTable &h, std::vector<std::string> &keys, bool expect) {
     std::vector<std::string>::iterator it;
     for (it = keys.begin(); it != keys.end(); it++) {
         std::string k = *it;
-        Item i(k, 0, 0, k.c_str(), k.length());
+        shared_ptr<Item> i(new Item(k, 0, 0, k.c_str(), k.length()));
         bool v = h.add(i);
         assert(expect == v);
     }

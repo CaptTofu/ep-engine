@@ -55,7 +55,7 @@ public:
     std::vector<std::string> dirty;
     virtual void visit(StoredValue *v) {
         if (v->isDirty()) {
-            dirty.push_back(v->getKey());
+            dirty.push_back(v->getItem()->getKey());
         }
     }
 };
@@ -128,7 +128,7 @@ void EventuallyPersistentStore::initQueue() {
     towrite = new std::queue<std::string>;
 }
 
-void EventuallyPersistentStore::set(const Item &item, Callback<bool> &cb) {
+void EventuallyPersistentStore::set(shared_ptr<const Item> item, Callback<bool> &cb) {
     mutation_type_t mtype = storage.set(item);
     bool rv = true;
 
@@ -136,7 +136,7 @@ void EventuallyPersistentStore::set(const Item &item, Callback<bool> &cb) {
         rv = false;
     } else if (mtype == WAS_CLEAN || mtype == NOT_FOUND) {
         LockHolder lh(mutex);
-        queueDirty(item.getKey());
+        queueDirty(item->getKey());
         if (mtype == NOT_FOUND) {
             ++stats.curr_items;
         }
@@ -162,8 +162,7 @@ void EventuallyPersistentStore::get(const std::string &key,
     StoredValue *v = storage.unlocked_find(key, bucket_num);
 
     if (v) {
-        GetValue rv(new Item(v->getKey(), v->getFlags(), v->getExptime(),
-                             v->getValue(), v->getCas()));
+        GetValue rv(v->getItem());
         cb.callback(rv);
     } else {
         GetValue rv(false);
@@ -283,7 +282,7 @@ int EventuallyPersistentStore::flushOne(std::queue<std::string> *q,
 
     bool found = v != NULL;
     bool isDirty = (found && v->isDirty());
-    Item *val = NULL;
+    shared_ptr<const Item> val;
 
     int ret = 0;
 
@@ -319,21 +318,16 @@ int EventuallyPersistentStore::flushOne(std::queue<std::string> *q,
             stats.dataAgeHighWat = stats.dataAge > stats.dataAgeHighWat
                 ? stats.dataAge : stats.dataAgeHighWat;
             // Copy it for the duration.
-            val = new Item(key, v->getFlags(), v->getExptime(), v->getValue(),
-                           v->getCas());
+            val = v->getItem();
         }
     }
     stats.flusher_todo--;
     lh.unlock();
 
     if (found && isDirty) {
-        underlying->set(*val, cb);
+        underlying->set(val, cb);
     } else if (!found) {
         underlying->del(key, cb);
-    }
-
-    if (val != NULL) {
-        delete val;
     }
 
     return ret;

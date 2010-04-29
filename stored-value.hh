@@ -13,18 +13,16 @@ class HashTable;
 
 class StoredValue {
 public:
-    StoredValue(const Item &itm, StoredValue *n) :
-        key(itm.getKey()), value(const_cast<Item&>(itm).getData(), itm.getNBytes()),
-        flags(itm.getFlags()), exptime(itm.getExptime()), dirtied(0), next(n),
-        cas(itm.getCas())
+    StoredValue() : dirtied(0), next(NULL) {}
+
+    StoredValue(shared_ptr<const Item> itm, StoredValue *n) :
+        item(itm), dirtied(0), next(n)
     {
         markDirty();
     }
 
-    StoredValue(const Item &itm, StoredValue *n, bool setDirty) :
-        key(itm.getKey()), value(const_cast<Item&>(itm).getData(), itm.getNBytes()),
-        flags(itm.getFlags()), exptime(itm.getExptime()), dirtied(0), next(n),
-        cas(itm.getCas())
+    StoredValue(shared_ptr<const Item> itm, StoredValue *n, bool setDirty) :
+        item(itm), dirtied(0), next(n)
     {
         if (setDirty) {
             markDirty();
@@ -35,6 +33,7 @@ public:
 
     ~StoredValue() {
     }
+
     void markDirty() {
         data_age = ep_current_time();
         if (!isDirty()) {
@@ -67,47 +66,23 @@ public:
         return dirtied == 0;
     }
 
-    const std::string &getKey() const {
-        return key;
+    const shared_ptr<const Item> getItem() const {
+        return item;
     }
 
-    const std::string &getValue() const {
-        return value;
-    }
-
-    rel_time_t getExptime() const {
-        return exptime;
-    }
-
-    uint32_t getFlags() const {
-        return flags;
-    }
-
-    void setValue(const char *v, const size_t nv,
-                  uint32_t newFlags, rel_time_t newExp, uint64_t theCas) {
-        cas = theCas;
-        flags = newFlags;
-        exptime = newExp;
-        value.assign(v, nv);
+    void setItem(shared_ptr<const Item> itm) {
+        item = itm;
         markDirty();
-    }
-
-    uint64_t getCas() const {
-        return cas;
     }
 
 private:
 
     friend class HashTable;
 
-    std::string key;
-    std::string value;
-    uint32_t flags;
-    rel_time_t exptime;
+    shared_ptr<const Item> item;
     rel_time_t dirtied;
     rel_time_t data_age;
     StoredValue *next;
-    uint64_t cas;
     DISALLOW_COPY_AND_ASSIGN(StoredValue);
 };
 
@@ -129,7 +104,7 @@ public:
         size = s;
         n_locks = l;
         active = true;
-        values = (StoredValue**)calloc(s, sizeof(StoredValue**));
+        values = (StoredValue**)calloc(s, sizeof(StoredValue*));
         mutexes = new Mutex[l];
     }
 
@@ -158,44 +133,42 @@ public:
         return unlocked_find(key, bucket_num);
     }
 
-    mutation_type_t set(const Item &val) {
+    mutation_type_t set(shared_ptr<const Item> val) {
         assert(active);
         mutation_type_t rv = NOT_FOUND;
-        int bucket_num = bucket(val.getKey());
+        int bucket_num = bucket(val->getKey());
         LockHolder lh(getMutex(bucket_num));
-        StoredValue *v = unlocked_find(val.getKey(), bucket_num);
-        Item &itm = const_cast<Item&>(val);
+        Item &itm = const_cast<Item&>(*val);
+        StoredValue *v = unlocked_find(val->getKey(), bucket_num);
         if (v) {
-            if (val.getCas() != 0 && val.getCas() != v->getCas()) {
+            if (val->getCas() != 0 && val->getCas() != v->getItem()->getCas()) {
                 return INVALID_CAS;
             }
             itm.setCas();
             rv = v->isClean() ? WAS_CLEAN : WAS_DIRTY;
-            v->setValue(itm.getData(), itm.getNBytes(),
-                        itm.getFlags(), itm.getExptime(),
-                        itm.getCas());
+            v->setItem(val);
         } else {
-            if (itm.getCas() != 0) {
+            if (val->getCas() != 0) {
                 return INVALID_CAS;
             }
-
-            v = new StoredValue(itm, values[bucket_num]);
+            itm.setCas();
+            v = new StoredValue(val, values[bucket_num]);
             values[bucket_num] = v;
         }
         return rv;
     }
 
-    bool add(const Item &val, bool isDirty = true) {
+    bool add(shared_ptr<const Item> val, bool isDirty = true) {
         assert(active);
-        int bucket_num = bucket(val.getKey());
+        int bucket_num = bucket(val->getKey());
         LockHolder lh(getMutex(bucket_num));
-        StoredValue *v = unlocked_find(val.getKey(), bucket_num);
+        StoredValue *v = unlocked_find(val->getKey(), bucket_num);
         if (v) {
             return false;
         } else {
-            Item &itm = const_cast<Item&>(val);
+            Item &itm = const_cast<Item&>(*val);
             itm.setCas();
-            v = new StoredValue(itm, values[bucket_num], isDirty);
+            v = new StoredValue(val, values[bucket_num], isDirty);
             values[bucket_num] = v;
         }
 
@@ -205,7 +178,7 @@ public:
     StoredValue *unlocked_find(const std::string &key, int bucket_num) {
         StoredValue *v = values[bucket_num];
         while (v) {
-            if (key.compare(v->key) == 0) {
+            if (key.compare(v->item->getKey()) == 0) {
                 return v;
             }
             v = v->next;
@@ -251,14 +224,14 @@ public:
         }
 
         // Special case the first one
-        if (key.compare(v->key) == 0) {
+        if (key.compare(v->getItem()->getKey()) == 0) {
             values[bucket_num] = v->next;
             delete v;
             return true;
         }
 
         while (v->next) {
-            if (key.compare(v->next->key) == 0) {
+            if (key.compare(v->next->getItem()->getKey()) == 0) {
                 StoredValue *tmp = v->next;
                 v->next = v->next->next;
                 delete tmp;

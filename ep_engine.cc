@@ -328,7 +328,7 @@ extern "C" {
     static bool EvpGetItemInfo(ENGINE_HANDLE *handle, const item* item, item_info *item_info)
     {
         (void)handle;
-        const Item *it = reinterpret_cast<const Item*>(item);
+        const shared_ptr<Item> it = *reinterpret_cast<const shared_ptr<Item>* >(item);
         if (item_info->nvalue < 1) {
             return false;
         }
@@ -340,7 +340,7 @@ extern "C" {
         item_info->nkey = static_cast<uint16_t>(it->getNKey());
         item_info->nvalue = 1;
         item_info->key = it->getKey().c_str();
-        item_info->value[0].iov_base = const_cast<Item*>(it)->getData();
+        item_info->value[0].iov_base = it->getData();
         item_info->value[0].iov_len = it->getNBytes();
         return true;
     }

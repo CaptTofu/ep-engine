@@ -18,15 +18,15 @@
  */
 class GetValue {
 public:
-    GetValue() : value(NULL), success(false) { }
+    GetValue() : success(false) { }
 
-    GetValue(bool s) : value(NULL), success(s) { }
-    GetValue(Item *v) : value(v), success(true) { }
+    GetValue(bool s) : success(s) { }
+    GetValue(shared_ptr<const Item> v) : value(v), success(true) { }
 
     /**
      * The value retrieved for the key.
      */
-    Item* getValue() { return value; }
+    shared_ptr<const Item> getValue() { return value; }
 
     /**
      * True if a value was successfully retrieved.
@@ -35,7 +35,7 @@ public:
 
 private:
 
-    Item* value;
+    shared_ptr<const Item> value;
     bool success;
 };
 
@@ -71,7 +71,7 @@ public:
      * @param val the value to set
      * @param cb callback that will fire with true if the set succeeded
      */
-    virtual void set(const Item &item, Callback<bool> &cb) = 0;
+    virtual void set(shared_ptr<const Item> item, Callback<bool> &cb) = 0;
 
     /**
      * Get the value for the given key.

@@ -11,6 +11,8 @@
 
 #define NUMBER_OF_SHARDS 4
 
+typedef shared_ptr<const Item> citem;
+
 extern "C" {
     EXPORT_FUNCTION
     ENGINE_ERROR_CODE create_instance(uint64_t interface,
@@ -66,7 +68,7 @@ private:
      * Add a new item to the tap queue.
      * @return true if the the queue was empty
      */
-    bool addEvent(Item *it) {
+    bool addEvent(shared_ptr<const Item> it) {
         return addEvent(it->getKey());
     }
 
@@ -187,7 +189,7 @@ public:
     }
 
     void visit(StoredValue *v) {
-        tapConn->addEvent(v->getKey());
+        tapConn->addEvent(v->getItem()->getKey());
     }
 
 private:
@@ -291,7 +293,7 @@ public:
                                    const rel_time_t exptime)
     {
         (void)cookie;
-        *item = new Item(key, nkey, nbytes, flags, exptime);
+        *item = new citem(new Item(key, nkey, nbytes, flags, exptime));
         if (*item == NULL) {
             return ENGINE_ENOMEM;
         } else {
@@ -328,7 +330,7 @@ public:
     void itemRelease(const void* cookie, item *item)
     {
         (void)cookie;
-        delete (Item*)item;
+        delete (citem*)item;
     }
 
     ENGINE_ERROR_CODE get(const void* cookie,
@@ -342,7 +344,7 @@ public:
         backend->get(k, getCb);
         getCb.waitForValue();
         if (getCb.val.isSuccess()) {
-            *item = getCb.val.getValue();
+            *item = new citem(getCb.val.getValue());
             return ENGINE_SUCCESS;
         } else {
             return ENGINE_KEY_ENOENT;
@@ -452,12 +454,12 @@ public:
     {
         ENGINE_ERROR_CODE ret;
         BoolCallback callback;
-        Item *it = static_cast<Item*>(itm);
+        citem *it = static_cast<citem*>(itm);
         item *i;
 
         switch (operation) {
             case OPERATION_CAS:
-                if (it->getCas() == 0) {
+                if ((*it)->getCas() == 0) {
                     // Using a cas command with a cas wildcard doesn't make sense
                     ret = ENGINE_NOT_STORED;
                     break;
@@ -466,8 +468,8 @@ public:
             case OPERATION_SET:
                 backend->set(*it, callback);
                 if (callback.getValue()) {
-                    *cas = it->getCas();
-                    addMutationEvent(it);
+                    *cas = (*it)->getCas();
+                    addMutationEvent(*it);
                     ret = ENGINE_SUCCESS;
                 } else {
                     ret = ENGINE_KEY_EEXISTS;
@@ -476,24 +478,24 @@ public:
 
             case OPERATION_ADD:
                 // @todo this isn't atomic!
-                if (get(cookie, &i, it->getKey().c_str(), it->getNKey()) == ENGINE_SUCCESS) {
+                if (get(cookie, &i, (*it)->getKey().c_str(), (*it)->getNKey()) == ENGINE_SUCCESS) {
                     itemRelease(cookie, i);
                     ret = ENGINE_NOT_STORED;
                 } else {
                     backend->set(*it, callback);
-                    *cas = it->getCas();
-                    addMutationEvent(it);
+                    *cas = (*it)->getCas();
+                    addMutationEvent(*it);
                     ret = ENGINE_SUCCESS;
                 }
                 break;
 
             case OPERATION_REPLACE:
                 // @todo this isn't atomic!
-                if (get(cookie, &i, it->getKey().c_str(), it->getNKey()) == ENGINE_SUCCESS) {
+                if (get(cookie, &i, (*it)->getKey().c_str(), (*it)->getNKey()) == ENGINE_SUCCESS) {
                     itemRelease(cookie, i);
                     backend->set(*it, callback);
-                    *cas = it->getCas();
-                    addMutationEvent(it);
+                    *cas = (*it)->getCas();
+                    addMutationEvent(*it);
                     ret = ENGINE_SUCCESS;
                 } else {
                     ret = ENGINE_NOT_STORED;
@@ -503,24 +505,23 @@ public:
             case OPERATION_APPEND:
             case OPERATION_PREPEND:
                 do {
-                    if ((ret = get(cookie, &i, it->getKey().c_str(),
-                                   it->getNKey())) == ENGINE_SUCCESS) {
-                        Item *old = reinterpret_cast<Item*>(i);
+                    if ((ret = get(cookie, &i, (*it)->getKey().c_str(),
+                                   (*it)->getNKey())) == ENGINE_SUCCESS) {
+                        citem *old = reinterpret_cast<citem*>(i);
+                        citem newItem;
 
                         if (operation == OPERATION_APPEND) {
-                            if (!old->append(*it)) {
-                                itemRelease(cookie, i);
-                                return ENGINE_ENOMEM;
-                            }
+                            newItem = (*old)->append(*it);
                         } else {
-                            if (!old->prepend(*it)) {
-                                itemRelease(cookie, i);
-                                return ENGINE_ENOMEM;
-                            }
+                            newItem = (*old)->prepend(*it);
+                        }
+
+                        itemRelease(cookie, i);
+                        if (!newItem) {
+                            return ENGINE_ENOMEM;
                         }
 
                         ret = store(cookie, old, cas, OPERATION_CAS);
-                        itemRelease(cookie, i);
                     }
                 } while (ret == ENGINE_KEY_EEXISTS);
 
@@ -553,10 +554,11 @@ public:
         ENGINE_ERROR_CODE ret;
         ret = get(cookie, &it, key, nkey);
         if (ret == ENGINE_SUCCESS) {
-            Item *item = static_cast<Item*>(it);
+            citem *itm = static_cast<citem*>(it);
             char *endptr;
-            uint64_t val = strtoull(item->getData(), &endptr, 10);
-            if ((errno != ERANGE) && (isspace(*endptr) || (*endptr == '\0' && endptr != item->getData()))) {
+            uint64_t val = strtoull((*itm)->getConstData(), &endptr, 10);
+            if ((errno != ERANGE) && (isspace(*endptr) ||
+                (*endptr == '\0' && endptr != (*itm)->getConstData()))) {
                 if (increment) {
                     val += delta;
                 } else {
@@ -571,24 +573,22 @@ public:
                 size_t nb = snprintf(value, sizeof(value), "%llu\r\n",
                                      (unsigned long long)val);
                 *result = val;
-                Item *nit = new Item(key, (uint16_t)nkey, item->getFlags(),
-                                     exptime, value, nb);
-                nit->setCas(item->getCas());
-                ret = store(cookie, nit, cas, OPERATION_CAS);
-                delete nit;
+                citem nit(new Item(key, (uint16_t)nkey, (*itm)->getFlags(),
+                                   exptime, value, nb, (*itm)->getCas()));
+                ret = store(cookie, &nit, cas, OPERATION_CAS);
             } else {
                 ret = ENGINE_EINVAL;
             }
 
-            delete item;
+            itemRelease(cookie, (item*)itm);
         } else if (ret == ENGINE_KEY_ENOENT && create) {
             char value[80];
             size_t nb = snprintf(value, sizeof(value), "%llu\r\n",
                                  (unsigned long long)initial);
             *result = initial;
-            Item *item = new Item(key, (uint16_t)nkey, 0, exptime, value, nb);
-            ret = store(cookie, item, cas, OPERATION_ADD);
-            delete item;
+            shared_ptr<const Item> item(new Item(key, (uint16_t)nkey, 0,
+                                                 exptime, value, nb));
+            ret = store(cookie, &item, cas, OPERATION_ADD);
         }
 
         /* We had a race condition.. just call ourself recursively to retry */
@@ -775,12 +775,12 @@ public:
 
         case TAP_MUTATION:
         {
-            Item *item = new Item(key, (uint16_t)nkey, flags, exptime, data, ndata);
+            shared_ptr<const Item> item(new Item(key, (uint16_t)nkey, flags,
+                                                 exptime, data, ndata));
             /* @TODO we don't have CAS now.. we might in the future.. */
             (void)cas;
             uint64_t ncas;
-            ENGINE_ERROR_CODE ret = store(cookie, item, &ncas, OPERATION_SET);
-            delete item;
+            ENGINE_ERROR_CODE ret = store(cookie, &item, &ncas, OPERATION_SET);
             return ret;
         }
 
@@ -965,7 +965,7 @@ private:
         }
     }
 
-    void addMutationEvent(Item *it) {
+    void addMutationEvent(shared_ptr<const Item> it) {
         // Currently we use the same queue for all kinds of events..
         addEvent(it->getKey());
     }

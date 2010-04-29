@@ -246,7 +246,7 @@ public:
     /**
      * Overrides set().
      */
-    void set(const Item &item, Callback<bool> &cb);
+    void set(shared_ptr<const Item> item, Callback<bool> &cb);
 
     /**
      * Overrides get().
@@ -345,7 +345,7 @@ public:
     /**
      * Overrides set().
      */
-    void set(const Item &item, Callback<bool> &cb);
+    void set(shared_ptr<const Item> item, Callback<bool> &cb);
 
     /**
      * Overrides get().

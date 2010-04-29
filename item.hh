@@ -8,6 +8,22 @@
 #include <stdio.h>
 #include <memcached/engine.h>
 
+#if defined(HAVE_MEMORY)
+# include <memory>
+#endif
+#if defined(HAVE_TR1_MEMORY)
+# include <tr1/memory>
+#endif
+#if defined(HAVE_BOOST_SHARED_PTR_HPP)
+# include <boost/shared_ptr.hpp>
+#endif
+
+#if defined(SHARED_PTR_NAMESPACE)
+using SHARED_PTR_NAMESPACE::shared_ptr;
+#else
+# error No shared pointer implementation found!
+#endif
+
 /**
  * The Item structure we use to pass information between the memcached
  * core and the backend. Please note that the kvstore don't store these
@@ -15,59 +31,50 @@
  */
 class Item {
 public:
-    Item() : flags(0), exptime(0), cas(0)
+    Item(const void *k, const size_t nk, const size_t nb,
+         const int fl, const rel_time_t exp, uint64_t theCas = 0) :
+        flags(fl), exptime(exp), key(static_cast<const char *>(k), nk), cas(theCas)
     {
-        key.assign("");
-        setData(NULL, 0);
+        setData(NULL, nb);
     }
 
-    Item(const void* k, const size_t nk, const size_t nb,
+     Item(const std::string &k, const size_t nb,
          const int fl, const rel_time_t exp, uint64_t theCas = 0) :
-        flags(fl), exptime(exp), cas(theCas)
+        flags(fl), exptime(exp), key(k), cas(theCas)
     {
-        key.assign(static_cast<const char*>(k), nk);
         setData(NULL, nb);
     }
 
     Item(const std::string &k, const int fl, const rel_time_t exp,
          const void *dta, const size_t nb, uint64_t theCas = 0) :
-        flags(fl), exptime(exp), cas(theCas)
+        flags(fl), exptime(exp), key(k), cas(theCas)
     {
-        key.assign(k);
         setData(static_cast<const char*>(dta), nb);
     }
 
     Item(const std::string &k, const int fl, const rel_time_t exp,
          const std::string &val, uint64_t theCas = 0) :
-        flags(fl), exptime(exp), cas(theCas)
+        flags(fl), exptime(exp), key(k), cas(theCas)
     {
-        key.assign(k);
         setData(val.c_str(), val.size());
     }
 
     Item(const void *k, uint16_t nk, const int fl, const rel_time_t exp,
          const void *dta, const size_t nb, uint64_t theCas = 0) :
-        flags(fl), exptime(exp), cas(theCas)
+        flags(fl), exptime(exp), key(static_cast<const char*>(k), nk), cas(theCas)
     {
-        key.assign(static_cast<const char*>(k), nk);
         setData(static_cast<const char*>(dta), nb);
-    }
-
-    Item(const Item &itm) : flags(itm.flags), exptime(itm.exptime), cas(itm.cas)
-    {
-        key.assign(itm.key);
-        setData(itm.data, itm.nbytes);
     }
 
     ~Item() {
         delete []data;
     }
 
-    Item* clone() {
-        return new Item(key, flags, exptime, data, nbytes, cas);
+    char *getData() {
+        return data;
     }
 
-    char *getData() {
+    const char *getConstData() const {
         return data;
     }
 
@@ -99,8 +106,8 @@ public:
         cas = nextCas();
     }
 
-    void setCas(uint64_t ncas) {
-        cas = ncas;
+    void setCas(uint64_t newCas) {
+        cas = newCas;
     }
 
     /**
@@ -109,21 +116,13 @@ public:
      * @param item the item to append to this one
      * @return true if success
      */
-    bool append(const Item &item) {
-        size_t ns = nbytes + item.nbytes - 2;
-        char *c = new char[ns];
-        if (c == NULL) {
-            return false;
-        }
-
+    shared_ptr<Item> append(shared_ptr<const Item> item) const {
+        size_t ns = nbytes + item->nbytes - 2;
+        shared_ptr<Item> newItem(new Item(key, ns, flags, exptime, cas));
+        char *c = newItem->getData();
         memcpy(c, data, nbytes - 2);
-        memcpy(c + nbytes - 2, item.data, item.nbytes);
-
-        delete []data;
-        data = c;
-        nbytes = ns;
-
-        return true;
+        memcpy(c + nbytes - 2, item->data, item->nbytes);
+        return newItem;
     }
 
     /**
@@ -132,24 +131,17 @@ public:
      * @param item the item to prepend to this one
      * @return true if success
      */
-    bool prepend(const Item &item) {
-        size_t ns = nbytes + item.nbytes - 2;
-        char *c = new char[ns];
-        if (c == NULL) {
-            return false;
-        }
-
-        memcpy(c, item.data, item.nbytes - 2);
-        memcpy(c + item.nbytes - 2, data, nbytes);
-
-        delete []data;
-        data = c;
-        nbytes = ns;
-
-        return true;
+    shared_ptr<Item> prepend(shared_ptr<const Item> item) const {
+        size_t ns = nbytes + item->nbytes - 2;
+        shared_ptr<Item> newItem(new Item(key, ns, flags, exptime, cas));
+        char *c = newItem->getData();
+        memcpy(c, item->data, item->nbytes - 2);
+        memcpy(c + item->nbytes - 2, data, nbytes);
+        return newItem;
     }
 
 private:
+
     /**
      * Set the item's data. This is only used by constructors, so we
      * make it private.
@@ -206,6 +198,7 @@ private:
     static void (*casNotifier)(uint64_t);
     static uint64_t casCounter;
     static Mutex casMutex;
+    DISALLOW_COPY_AND_ASSIGN(Item);
 };
 
 #endif

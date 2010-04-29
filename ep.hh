@@ -84,10 +84,9 @@ public:
         : hashtable(ht), stats(st) { }
 
     void callback(GetValue &val) {
-        Item *i = val.getValue();
+        shared_ptr<const Item> i = val.getValue();
         if (i != NULL) {
-            hashtable.add(*i, true);
-            delete i;
+            hashtable.add(i, true);
         }
         stats.warmedUp++;
     }
@@ -104,7 +103,7 @@ public:
 
     ~EventuallyPersistentStore();
 
-    void set(const Item &item, Callback<bool> &cb);
+    void set(shared_ptr<const Item> item, Callback<bool> &cb);
 
     void get(const std::string &key, Callback<GetValue> &cb);
 
