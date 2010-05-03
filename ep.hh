@@ -75,6 +75,15 @@ struct ep_stats {
     uint32_t queue_age_cap;
 };
 
+struct key_stats {
+    uint64_t cas;
+    rel_time_t exptime;
+    rel_time_t dirtied;
+    rel_time_t data_age;
+    uint32_t flags;
+    bool dirty;
+};
+
 // Forward declaration
 class Flusher;
 
@@ -154,6 +163,8 @@ public:
     }
 
     const Flusher* getFlusher();
+
+    bool getKeyStats(const std::string &key, key_stats &kstats);
 
 private:
     /* Queue an item to be written to persistent layer. */
