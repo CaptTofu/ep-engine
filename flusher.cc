@@ -2,6 +2,11 @@
 
 #include "flusher.hh"
 
+bool FlusherStepper::callback(Dispatcher &d, TaskId t) {
+    getLogger()->log(EXTENSION_LOG_DEBUG, NULL, "Stepping flusher\n");
+    return flusher->step(d, t);
+}
+
 bool Flusher::stop(void) {
     return transition_state(stopping);
 }
@@ -54,6 +59,9 @@ bool Flusher::transition_state(enum flusher_state to) {
                      stateName(_state), stateName(to));
 
     _state = to;
+    //Reschedule the task
+    dispatcher->kill(task);
+    start();
     return true;
 }
 
@@ -69,53 +77,62 @@ void Flusher::initialize(void) {
     getLogger()->log(EXTENSION_LOG_DEBUG, NULL,
                      "Initializing flusher; warming up\n");
 
-    time_t start = time(NULL);
+    time_t startTime = time(NULL);
     store->warmup();
-    store->stats.warmupTime = time(NULL) - start;
+    store->stats.warmupTime = time(NULL) - startTime;
     store->stats.warmupComplete = true;
     store->stats.curr_items += store->stats.warmedUp;
 
     getLogger()->log(EXTENSION_LOG_DEBUG, NULL,
                      "Warmup completed in %ds\n", store->stats.warmupTime);
-    hasInitialized = true;
     transition_state(running);
 }
 
-void Flusher::maybePause(void) {
-    if (_state == pausing) {
-        transition_state(paused);
-        while (_state == paused) {
-            sleep(1);
-        }
-    }
+void Flusher::start(void) {
+    task = dispatcher->schedule(&callback);
 }
 
-void Flusher::run(void) {
-    if (!hasInitialized) {
-        initialize();
-    }
+bool Flusher::step(Dispatcher &d, TaskId tid) {
     try {
-        while (_state != stopping) {
-            maybePause();
-
-            rel_time_t start = ep_current_time();
-            int n = doFlush(true);
-            if (n > 0) {
-                rel_time_t sleep_end = start + n;
-                while (_state == running && ep_current_time() < sleep_end) {
-                    sleep(1);
+        switch (_state) {
+        case initializing:
+            initialize();
+            return true;
+        case paused:
+            return false;
+        case pausing:
+            transition_state(paused);
+            return false;
+        case running:
+            {
+                int n = doFlush(true);
+                if (n > 0) {
+                    if (_state == running && n > 0) {
+                        d.snooze(tid, n);
+                    }
                 }
             }
-
+            return true;
+        case stopping:
+            {
+                std::stringstream ss;
+                ss << "Shutting down flusher (Write of all dirty items)"
+                   << std::endl;
+                getLogger()->log(EXTENSION_LOG_DEBUG, NULL, "%s",
+                                 ss.str().c_str());
+            }
+            store->stats.min_data_age = 0;
+            doFlush(false);
+            getLogger()->log(EXTENSION_LOG_DEBUG, NULL, "Flusher stopped\n");
+            transition_state(stopped);
+            return false;
+        case stopped:
+            return false;
+        default:
+            getLogger()->log(EXTENSION_LOG_WARNING, NULL,
+                "Unexpected state in flusher: %s", stateName());
+            assert(false);
         }
-        std::stringstream ss;
-        ss << "Shutting down flusher (Write of all dirty items)"
-           << std::endl;
-        getLogger()->log(EXTENSION_LOG_DEBUG, NULL, "%s",
-                         ss.str().c_str());
-        store->stats.min_data_age = 0;
-        doFlush(false);
-        getLogger()->log(EXTENSION_LOG_DEBUG, NULL, "Flusher stopped\n");
     } catch(std::runtime_error &e) {
         std::stringstream ss;
         ss << "Exception in flusher loop: " << e.what() << std::endl;
@@ -123,7 +140,6 @@ void Flusher::run(void) {
                          ss.str().c_str());
         assert(false);
     }
-    transition_state(stopped);
 }
 
 int Flusher::doFlush(bool shouldWait) {
@@ -140,12 +156,15 @@ int Flusher::doFlush(bool shouldWait) {
 
         while (!q->empty()) {
             int n = store->flushSome(q, rejectQueue);
-            maybePause();
+            if (_state == pausing) {
+                transition_state(paused);
+            }
             if (n < rv) {
                 rv = n;
             }
         }
-
+        getLogger()->log(EXTENSION_LOG_DEBUG, NULL, "Rejected %d items\n",
+                         rejectQueue->size());
         store->completeFlush(rejectQueue, flush_start);
 
         getLogger()->log(EXTENSION_LOG_INFO, NULL,

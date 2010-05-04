@@ -18,12 +18,14 @@
 
 #include <memcached/engine.h>
 
+extern EXTENSION_LOGGER_DESCRIPTOR *getLogger(void);
+
 #include "kvstore.hh"
 #include "locks.hh"
 #include "sqlite-kvstore.hh"
 #include "stored-value.hh"
+#include "dispatcher.hh"
 
-extern EXTENSION_LOGGER_DESCRIPTOR *getLogger(void);
 
 #define DEFAULT_TXN_SIZE 50000
 #define MAX_TXN_SIZE 10000000
@@ -131,6 +133,8 @@ public:
 
     void resetStats(void);
 
+    void startDispatcher(void);
+
     void stopFlusher(void);
 
     void startFlusher(void);
@@ -191,11 +195,11 @@ private:
     bool doPersistence;
     KVStore                   *underlying;
     size_t                     est_size;
+    Dispatcher                *dispatcher;
     Flusher                   *flusher;
     HashTable                  storage;
     SyncObject                 mutex;
     std::queue<std::string>   *towrite;
-    pthread_t                  thread;
     struct ep_stats            stats;
     LoadStorageKVPairCallback  loadStorageKVPairCallback;
     int                        txnSize;

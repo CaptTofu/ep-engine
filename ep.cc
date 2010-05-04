@@ -9,18 +9,6 @@
 #include <iostream>
 
 extern "C" {
-    static void* launch_flusher_thread(void* arg) {
-        Flusher *flusher = (Flusher*) arg;
-        try {
-            flusher->run();
-        } catch (std::exception& e) {
-            std::cerr << "flusher exception caught: " << e.what() << std::endl;
-        } catch(...) {
-            std::cerr << "Caught a fatal exception in the flusher thread" << std::endl;
-        }
-        return NULL;
-    }
-
     static rel_time_t uninitialized_current_time(void) {
         abort();
         return 0;
@@ -41,12 +29,14 @@ EventuallyPersistentStore::EventuallyPersistentStore(KVStore *t,
     initQueue();
 
     doPersistence = getenv("EP_NO_PERSITENCE") == NULL;
-    flusher = new Flusher(this);
+    dispatcher = new Dispatcher();
+    flusher = new Flusher(this, dispatcher);
 
     txnSize = DEFAULT_TXN_SIZE;
 
     underlying = t;
 
+    startDispatcher();
     startFlusher();
     assert(underlying);
 }
@@ -63,9 +53,7 @@ public:
 
 EventuallyPersistentStore::~EventuallyPersistentStore() {
     stopFlusher();
-    if (flusher != NULL) {
-        pthread_join(thread, NULL);
-    }
+    dispatcher->stop(); // this will wait for *all* dispatcher tasks to complete
 
     // Verify that we don't have any dirty objects!
     if (getenv("EP_VERIFY_SHUTDOWN_FLUSH") != NULL) {
@@ -85,8 +73,14 @@ EventuallyPersistentStore::~EventuallyPersistentStore() {
     }
 
     delete flusher;
+    delete dispatcher;
     delete towrite;
 }
+
+void EventuallyPersistentStore::startDispatcher() {
+    dispatcher->start();
+}
+
 
 const Flusher* EventuallyPersistentStore::getFlusher() {
     return flusher;
@@ -94,12 +88,7 @@ const Flusher* EventuallyPersistentStore::getFlusher() {
 
 void EventuallyPersistentStore::startFlusher() {
     LockHolder lh(mutex);
-
-    // Run in a thread...
-    if(pthread_create(&thread, NULL, launch_flusher_thread, flusher)
-       != 0) {
-        throw std::runtime_error("Error initializing queue thread");
-    }
+    flusher->start();
     mutex.notify();
 }
 
