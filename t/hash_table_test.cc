@@ -1,5 +1,7 @@
 #include <signal.h>
 #include <assert.h>
+#include <unistd.h>
+#include <sys/unistd.h>
 
 #include <algorithm>
 
@@ -99,7 +101,9 @@ static void testHashSizeTwo() {
 }
 
 static void testReverseDeletions() {
+#ifndef __WIN32
     alarm(10);
+#endif
     HashTable h(5, 1);
     assert(count(h) == 0);
     const int nkeys = 10000;
@@ -120,7 +124,9 @@ static void testReverseDeletions() {
 }
 
 static void testForwardDeletions() {
+#ifndef __WIN32
     alarm(10);
+#endif
     HashTable h(5, 1);
     assert(count(h) == 0);
     const int nkeys = 10000;
