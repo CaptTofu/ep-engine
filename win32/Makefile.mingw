@@ -7,6 +7,8 @@ MEMCACHED=../memcached
 OBJDIR = .libs .libs/embedded
 BINARIES= .libs/ep.so
 HASH_TABLE_TEST= hash_table_test.exe
+PRIORITY_TEST= priority_test.exe
+ATOMIC_TEST= atomic_test.exe
 LIB=-L/usr/local/lib
 INCLUDE= -Iwin32 -I.libs -I${MEMCACHED}/include -I/usr/local/include -I.
 MC_UTIL= ${MEMCACHED}/.libs/util.o
@@ -15,7 +17,7 @@ CPPFLAGS= -march=i686 -O2 -DHAVE_CONFIG_H ${INCLUDE} -Wall
 
 all: ${BINARIES}
 
-testprogs: ${HASH_TABLE_TEST} ${PRIORITY_TEST}
+testprogs: ${HASH_TABLE_TEST} ${PRIORITY_TEST} ${ATOMIC_TEST}
 
 CFLAGS = -std=gnu99 -DNDEBUG \
            -fno-strict-aliasing -Wstrict-prototypes -Wmissing-prototypes \
@@ -40,6 +42,9 @@ HASH_TABLE_TEST_OBJS = ${HASH_TABLE_TEST_CC_SRC:%.cc=%.o} .libs/item.o
 PRIORITY_TEST_CC_SRC = t/priority_test.cc
 PRIORITY_TEST_OBJS = ${PRIORITY_TEST_CC_SRC:%.cc=%.o}
 
+ATOMIC_TEST_CC_SRC = t/atomic_test.cc
+ATOMIC_TEST_OBJS = ${ATOMIC_TEST_CC_SRC:%.cc=%.o}
+
 .libs/ep.so: ${OBJDIR} ${GENFILES} $(EP_ENGINE_OBJS)
 	${LINK.cc} -o $@ -shared ${EP_ENGINE_OBJS} ${MC_UTIL} \
                   ${LIB} -lpthread \
@@ -52,6 +57,11 @@ hash_table_test.exe: ${GENFILES} ${HASH_TABLE_TEST_OBJS}
 
 priority_test.exe: ${GENFILES} ${PRIORITY_TEST_OBJS}
 	${LINK.cc} -o $@ -shared ${PRIORITY_TEST_OBJS} \
+                  ${LIB} -lpthread \
+                  -lws2_32
+
+atomic_test.exe: ${GENFILES} ${ATOMIC_TEST_OBJS}
+	${LINK.cc} -o $@  -fbuiltin -shared ${ATOMIC_TEST_OBJS} \
                   ${LIB} -lpthread \
                   -lws2_32
 

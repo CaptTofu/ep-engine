@@ -5,6 +5,9 @@
 #define NUM_THREADS 90
 #define NUM_ITEMS 1000000
 
+void *launch_consumer_thread(void *arg);
+void *launch_test_thread(void *arg);
+
 struct thread_args {
     SyncObject mutex;
     SyncObject gate;
